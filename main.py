@@ -2,16 +2,51 @@ import streamlit as st
 import cv2
 import ollama
 import time
+import threading
+import collections
+import contextlib
 
 # --- App Configuration ---
 st.set_page_config(page_title="VLM Observer", layout="wide")
 st.title("VLM Observer")
 
 # --- VLM Configuration ---
-# SET YOUR OLLAMA ENDPOINT AND MODEL HERE
 OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODEL = "llava"
-# -------------------------
+
+# --- Thread-Safe Frame Buffer ---
+FRAME_BUFFER_SIZE = 10  # Store the last 10 frames for potential motion analysis
+frame_buffer = collections.deque(maxlen=FRAME_BUFFER_SIZE)
+frame_lock = threading.Lock()
+stop_event = threading.Event()
+
+def camera_capture_thread():
+    """Thread function to continuously capture frames from the camera."""
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        st.error("Could not open camera.")
+        return
+
+    while not stop_event.is_set():
+        ret, frame = cap.read()
+        if ret:
+            with frame_lock:
+                frame_buffer.append(frame)
+        else:
+            # Brief pause if we fail to read a frame
+            time.sleep(0.1)
+    cap.release()
+
+@contextlib.contextmanager
+def camera_manager():
+    """A context manager to handle the camera thread lifecycle."""
+    cam_thread = threading.Thread(target=camera_capture_thread)
+    cam_thread.start()
+    try:
+        yield
+    finally:
+        stop_event.set()
+        cam_thread.join()
 
 # --- Helper Functions ---
 def analyze_image(image_bytes, prompt):
@@ -49,10 +84,8 @@ st.sidebar.header("Configuration")
 MONITORING_INTERVAL = st.sidebar.slider("Monitoring Interval (sec)", 1, 10, 2)
 
 st.sidebar.header("Controls")
-# --- Mode: Idle ---
 if st.session_state.mode == "idle":
     st.sidebar.info("The application is idle. Choose a mode below.")
-    
     with st.sidebar.expander("👀 Monitoring Mode", expanded=True):
         monitor_input = st.text_input("What should I look for?", key="monitor_input_idle")
         if st.button("Start Monitoring"):
@@ -60,8 +93,6 @@ if st.session_state.mode == "idle":
                 st.session_state.monitoring_target = monitor_input
                 st.session_state.mode = "monitoring"
                 st.rerun()
-            else:
-                st.warning("Please enter something to look for.")
 
     with st.sidebar.expander("💬 Chat Mode", expanded=True):
         if st.button("Start Chatting"):
@@ -69,15 +100,12 @@ if st.session_state.mode == "idle":
             st.session_state.chat_history = []
             st.rerun()
 
-# --- Mode: Monitoring ---
 elif st.session_state.mode == "monitoring":
     st.sidebar.info(f"Monitoring for: **{st.session_state.monitoring_target}**")
     if st.sidebar.button("Stop Monitoring"):
         st.session_state.mode = "idle"
-        st.session_state.monitoring_target = ""
         st.rerun()
 
-# --- Mode: Chat ---
 elif st.session_state.mode == "chat":
     st.sidebar.info("You are in chat mode.")
     if st.sidebar.button("End Chat"):
@@ -96,57 +124,48 @@ elif st.session_state.mode == "chat":
         st.session_state.chat_history.append(("user", chat_input))
         st.rerun()
 
-# --- Main Video Feed ---
+# --- Main App Logic ---
 st.header("Live Camera Feed")
 video_placeholder = st.empty()
 
-# --- Camera and Core Logic Loop ---
-cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    st.error("Could not open camera. Please check permissions.")
-else:
+with camera_manager():
     while True:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Failed to capture frame from camera.")
-            break
+        with frame_lock:
+            if frame_buffer:
+                # Get the most recent frame
+                frame = frame_buffer[-1]
+            else:
+                frame = None
+
+        if frame is None:
+            video_placeholder.text("Initializing camera...")
+            time.sleep(0.5)
+            continue
 
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         video_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
 
-        # --- Monitoring Logic ---
+        # --- Analysis Logic (uses the most recent frame) ---
         if st.session_state.mode == "monitoring":
             current_time = time.time()
             if current_time - st.session_state.last_check_time > MONITORING_INTERVAL:
                 st.session_state.last_check_time = current_time
-                
                 _, buffer = cv2.imencode('.jpg', frame)
-                image_bytes = buffer.tobytes()
-                
-                prompt = f"The user is looking for '{st.session_state.monitoring_target}'. Is this in the image? Answer with only the word 'yes' or 'no'."
-                answer = analyze_image(image_bytes, prompt)
-
+                prompt = f"The user is looking for '{st.session_state.monitoring_target}'. Is this in the image? Answer with only 'yes' or 'no'."
+                answer = analyze_image(buffer.tobytes(), prompt)
                 if answer and 'yes' in answer.lower():
                     st.toast(f"I see '{st.session_state.monitoring_target}'!", icon="✅")
                     st.session_state.mode = "idle"
-                    st.session_state.monitoring_target = ""
                     st.rerun()
 
-        # --- Chat Logic ---
         elif st.session_state.mode == "chat":
             if st.session_state.chat_history and st.session_state.chat_history[-1][0] == "user":
                 user_question = st.session_state.chat_history[-1][1]
-                
                 _, buffer = cv2.imencode('.jpg', frame)
-                image_bytes = buffer.tobytes()
-
                 with st.spinner('Thinking...'):
-                    model_response = analyze_image(image_bytes, user_question)
-                
+                    model_response = analyze_image(buffer.tobytes(), user_question)
                 if model_response:
                     st.session_state.chat_history.append(("assistant", model_response))
                     st.rerun()
 
         time.sleep(0.01)
-
-cap.release()
