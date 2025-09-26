@@ -2,15 +2,20 @@ import streamlit as st
 import cv2
 import ollama
 import time
+import supervision as sv
+from ultralytics import YOLO
 
 # --- App Configuration ---
 st.set_page_config(page_title="VLM Observer", layout="wide")
 st.title("VLM Observer")
 
-# --- VLM Configuration ---
+# --- Model and VLM Configuration ---
 OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODEL = "llava"
 MONITOR_KEYWORDS = ["monitor for", "look for", "find a", "find the"]
+MODEL = YOLO("yolov8n.pt")
+BOUNDING_BOX_ANNOTATOR = sv.BoundingBoxAnnotator()
+LABEL_ANNOTATOR = sv.LabelAnnotator()
 
 # --- Helper Functions ---
 def analyze_image(image_bytes, prompt):
@@ -98,14 +103,35 @@ while True:
         st.error("Failed to read frame from camera. The feed has been lost.")
         break
 
+    # --- Object Detection ---
+    results = MODEL(frame, verbose=False)[0]
+    detections = sv.Detections.from_ultralytics(results)
+
+    # --- Annotation ---
+    annotated_frame = frame.copy()
+    labels = [
+        f"{MODEL.model.names[class_id]} {confidence:0.2f}"
+        for _, _, confidence, class_id, _
+        in detections
+    ]
+    annotated_frame = BOUNDING_BOX_ANNOTATOR.annotate(
+        scene=annotated_frame,
+        detections=detections
+    )
+    annotated_frame = LABEL_ANNOTATOR.annotate(
+        scene=annotated_frame,
+        detections=detections,
+        labels=labels
+    )
+
+    # --- VLM Monitoring ---
     if st.session_state.monitoring_target:
         MONITORING_INTERVAL = st.sidebar.slider("Monitoring Interval (sec)", 1, 10, 2, key="monitor_interval")
         current_time = time.time()
         if current_time - st.session_state.last_check_time > MONITORING_INTERVAL:
             st.session_state.last_check_time = current_time
-            _, buffer = cv2.imencode('.jpg', frame)
+            _, buffer = cv2.imencode('.jpg', frame) # Use the original frame for VLM
             monitor_prompt = f"The user is looking for '{st.session_state.monitoring_target}'. Is this in the image? Answer with only 'yes' or 'no'."
-            # This analysis runs in the background of the video feed
             answer = analyze_image(buffer.tobytes(), monitor_prompt)
             if answer and 'yes' in answer.lower():
                 st.toast(f"I see '{st.session_state.monitoring_target}'!", icon="✅")
@@ -113,10 +139,11 @@ while True:
                 st.session_state.monitoring_target = None
                 st.rerun()
 
-    # --- Default Video Display ---
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    video_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
-    
+    # --- Video Display ---
+    # Convert annotated frame to RGB for Streamlit display
+    annotated_frame_rgb = cv2.cvtColor(annotated_frame, cv2.COLOR_BGR2RGB)
+    video_placeholder.image(annotated_frame_rgb, channels="RGB", use_container_width=True)
+
     time.sleep(0.01)
 
 cap.release()

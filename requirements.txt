@@ -1,3 +1,5 @@
 ollama
 opencv-python
 streamlit
+supervision
+ultralytics
