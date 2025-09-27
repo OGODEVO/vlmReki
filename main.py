@@ -111,8 +111,8 @@ while True:
     annotated_frame = frame.copy()
     labels = [
         f"{MODEL.model.names[class_id]} {confidence:0.2f}"
-        for _, _, confidence, class_id, _
-        in detections
+        for confidence, class_id
+        in zip(detections.confidence, detections.class_id)
     ]
     annotated_frame = BOX_ANNOTATOR.annotate(
         scene=annotated_frame,
