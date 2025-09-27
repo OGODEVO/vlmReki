@@ -4,7 +4,6 @@ import ollama
 import time
 import supervision as sv
 from ultralytics import YOLO
-from supervision.annotators.core import BoundingBoxAnnotator, LabelAnnotator
 
 # --- App Configuration ---
 st.set_page_config(page_title="VLM Observer", layout="wide")
@@ -15,8 +14,8 @@ OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_MODEL = "llava"
 MONITOR_KEYWORDS = ["monitor for", "look for", "find a", "find the"]
 MODEL = YOLO("yolov8n.pt")
-BOUNDING_BOX_ANNOTATOR = BoundingBoxAnnotator()
-LABEL_ANNOTATOR = LabelAnnotator()
+BOX_ANNOTATOR = sv.BoxAnnotator()
+LABEL_ANNOTATOR = sv.LabelAnnotator()
 
 # --- Helper Functions ---
 def analyze_image(image_bytes, prompt):
@@ -115,7 +114,7 @@ while True:
         for _, _, confidence, class_id, _
         in detections
     ]
-    annotated_frame = BOUNDING_BOX_ANNOTATOR.annotate(
+    annotated_frame = BOX_ANNOTATOR.annotate(
         scene=annotated_frame,
         detections=detections
     )
