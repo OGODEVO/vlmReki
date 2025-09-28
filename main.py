@@ -32,10 +32,17 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = [("assistant", "Hi! Ask me a question or tell me to monitor for something.")]
 if "monitoring_target" not in st.session_state:
     st.session_state.monitoring_target = None
+if "narrator_mode" not in st.session_state:
+    st.session_state.narrator_mode = False
 if "last_check_time" not in st.session_state:
     st.session_state.last_check_time = 0
 
 # --- UI Layout ---
+with st.sidebar:
+    st.header("Modes")
+    st.checkbox("Enable Narrator Mode", key="narrator_mode")
+    MONITORING_INTERVAL = st.slider("Analysis Interval (sec)", 1, 10, 3, key="monitor_interval")
+
 col1, col2 = st.columns([2, 1])
 with col1:
     st.header("Live Camera Feed")
@@ -74,6 +81,7 @@ if "last_prompt" in st.session_state and st.session_state.last_prompt:
     is_monitor_command = any(user_prompt.lower().strip().startswith(kw) for kw in MONITOR_KEYWORDS)
     
     if is_monitor_command:
+        st.session_state.narrator_mode = False # Disable narrator when monitoring
         for kw in MONITOR_KEYWORDS:
             if user_prompt.lower().strip().startswith(kw):
                 target = user_prompt[len(kw):].strip()
@@ -124,20 +132,29 @@ while True:
         labels=labels
     )
 
-    # --- VLM Monitoring ---
-    if st.session_state.monitoring_target:
-        MONITORING_INTERVAL = st.sidebar.slider("Monitoring Interval (sec)", 1, 10, 2, key="monitor_interval")
+    # --- Periodic VLM Analysis ---
+    is_analyzing = st.session_state.monitoring_target or st.session_state.narrator_mode
+    if is_analyzing:
         current_time = time.time()
         if current_time - st.session_state.last_check_time > MONITORING_INTERVAL:
             st.session_state.last_check_time = current_time
-            _, buffer = cv2.imencode('.jpg', frame) # Use the original frame for VLM
-            monitor_prompt = f"The user is looking for '{st.session_state.monitoring_target}'. Is this in the image? Answer with only 'yes' or 'no'."
-            answer = analyze_image(buffer.tobytes(), monitor_prompt)
-            if answer and 'yes' in answer.lower():
-                st.toast(f"I see '{st.session_state.monitoring_target}'!", icon="✅")
-                st.session_state.chat_history.append(("assistant", f"I've found it! I see **{st.session_state.monitoring_target}**."))
-                st.session_state.monitoring_target = None
-                st.rerun()
+            _, buffer = cv2.imencode('.jpg', frame)
+            
+            if st.session_state.monitoring_target:
+                monitor_prompt = f"The user is looking for '{st.session_state.monitoring_target}'. Is this in the image? Answer with only 'yes' or 'no'."
+                answer = analyze_image(buffer.tobytes(), monitor_prompt)
+                if answer and 'yes' in answer.lower():
+                    st.toast(f"I see '{st.session_state.monitoring_target}'!", icon="✅")
+                    st.session_state.chat_history.append(("assistant", f"I've found it! I see **{st.session_state.monitoring_target}**."))
+                    st.session_state.monitoring_target = None
+                    st.rerun()
+            
+            elif st.session_state.narrator_mode:
+                narrator_prompt = "Briefly describe what you see in this image. Be concise."
+                description = analyze_image(buffer.tobytes(), narrator_prompt)
+                if description:
+                    st.session_state.chat_history.append(("assistant", description))
+                    st.rerun()
 
     # --- Video Display ---
     # Convert annotated frame to RGB for Streamlit display
