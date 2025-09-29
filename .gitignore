@@ -12,3 +12,6 @@ venv/
 
 # Model files
 *.pt
+
+# Environment variables
+.env

@@ -4,14 +4,18 @@ import ollama
 import time
 import supervision as sv
 from ultralytics import YOLO
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # --- App Configuration ---
 st.set_page_config(page_title="VLM Observer", layout="wide")
 st.title("VLM Observer")
 
 # --- Model and VLM Configuration ---
-OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_MODEL = "llava"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")
 MONITOR_KEYWORDS = ["monitor for", "look for", "find a", "find the"]
 MODEL = YOLO("yolov8n.pt")
 BOX_ANNOTATOR = sv.BoxAnnotator()
@@ -154,7 +158,6 @@ while True:
                 description = analyze_image(buffer.tobytes(), narrator_prompt)
                 if description:
                     st.session_state.chat_history.append(("assistant", description))
-                    st.rerun()
 
     # --- Video Display ---
     # Convert annotated frame to RGB for Streamlit display
